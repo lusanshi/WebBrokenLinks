@@ -11,8 +11,6 @@ from urllib.parse import urlsplit
 
 from requests_html import HTMLSession
 
-from Config.db_conn import DBConn, DB_main
-
 
 @dataclass
 class BrokenLinks:
@@ -22,22 +20,28 @@ class BrokenLinks:
     max_pages: int
     max_tries: int
     timeout: int
-    # proxy: Tuple[dict]
-    _queue = Queue()
-    _processing = True
-    _success = set()
-    _failed = set()
-    _seen = set()
-    _map = {}
+    proxy: Tuple[dict]
+    _processing: bool = True
+
+    def __post_init__(self):
+        self._queue = Queue()
+        self._success = set()
+        self._failed = set()
+        self._seen = set()
+        self._map = {}
+        self._queue.put_nowait((self.root, 0, 0))
 
     def check(self):
-        self._queue.put_nowait((self.root, 0, 0))
+        threads = []
         for w in range(self.concurrency):
             t = Thread(target=self.worker)
             t.start()
+            threads.append(t)
         logging.info("Starting %d threads", self.concurrency)
         self._queue.join()
         self._processing = False
+        for t in threads:
+            t.join()
 
     def worker(self):
         session = HTMLSession(verify=False)
@@ -70,11 +74,6 @@ class BrokenLinks:
             results[i] = list(filter(lambda x: i in self._map[x], self._map))
         return results
 
-    def save(self, project_id):
-        with DBConn(DB_main) as c:
-            c.execute("UPDATE base_info SET urls_len=%s, broken_links=%s WHERE proj_id=%s",
-                      (len(self._success) + len(self._failed), dumps(self.result()), project_id))
-
 
 def genReport(name, data: dict, dirname):
     filename = f"{validateTitle(name)}.csv"
@@ -89,9 +88,3 @@ def validateTitle(title):
     rstr = r"[\/\\\:\*\?\"\<\>\|]"  # '/ \ : * ? " < > |'
     new_title = re.sub(rstr, "_", title)
     return new_title
-
-
-if __name__ == '__main__':
-    s = BrokenLinks('http://www.baidu.com/', 5, 3, 2000, 2, 5)
-    s.check()
-    print(s.result())
